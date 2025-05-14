@@ -2,20 +2,20 @@ from __future__ import annotations
 
 import logging
 from typing import Any
-from .const import DOMAIN
 
 from homeassistant import config_entries, core
-
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
-    LightEntity,
-    ColorMode,
-    LightEntityDescription,
     ATTR_RGB_COLOR,
+    ColorMode,
+    LightEntity,
+    LightEntityDescription,
 )
-from teleco_daisy import DaisyLight
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
+from .const import DOMAIN
+from .teleco_daisy import DaisyLight
 
 _LOGGER = logging.getLogger(__name__)
 
