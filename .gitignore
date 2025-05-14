@@ -25,3 +25,5 @@ devenv.local.nix
 # direnv
 .direnv
 
+*.DS_Store
+
