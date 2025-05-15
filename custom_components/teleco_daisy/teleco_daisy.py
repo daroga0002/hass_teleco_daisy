@@ -1,10 +1,18 @@
 from dataclasses import dataclass
 from time import sleep
 from typing import Literal
+import asyncio
+import json
+import logging
+import time
 
+import aiohttp
 import requests
 
-base_url = "https://tmate.telecoautomation.com/"
+TELECO_API_URL = "https://tmate.telecoautomation.com/"
+
+logging.basicConfig(level=logging.DEBUG)
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -59,68 +67,114 @@ class DaisyDevice:
         return self.client.status_device_list(self.installation, self)
 
 
+@dataclass
+class DaisyRoom:
+    idInstallationRoom: int
+    idRoomtype: int
+    roomDescription: str
+    roomOrder: int
+    deviceList: list["DaisyDevice"]
+
+
 class TelecoDaisy:
     idAccount: int | None = None
     idSession: str | None = None
 
-    def __init__(self, email, password):
-        self.s = requests.Session()
-        self.s.auth = ("teleco", "tmate20")
+    def __init__(
+        self,
+        session: aiohttp.ClientSession,
+        email: str,
+        password: str,
+        base_url=TELECO_API_URL,
+    ) -> None:
+        _LOGGER.debug("Init DAISY TELECO")
+        self.headers = {"Accept": "application/json", "Accept-Encoding": "gzip"}
+        self.auth = aiohttp.BasicAuth(
+            login="teleco", password="tmate20", encoding="utf-8"
+        )
+        self.base_url = base_url
+        self.session = session
         self.email = email
         self.password = password
 
-    def login(self):
-        login = self.s.post(
-            base_url + "teleco/services/account-login",
-            json={"email": self.email, "pwd": self.password},
-        )
-        login_json = login.json()
-        if login_json["codEsito"] != "S":
-            raise Exception(login_json)
+    async def post(self, request_path, post_data):
+        """Send a POST request to the specified URL with the given data.
 
-        self.idAccount = login_json["valRisultato"]["idAccount"]
-        self.idSession = login_json["valRisultato"]["idSession"]
+        Args:
+        request_path: The path for the request.
+        post_data: The data to be sent with the request.
 
-    def get_account_installation_list(self) -> list[DaisyInstallation]:
-        req = self.s.post(
-            base_url + "teleco/services/account-installation-list",
-            json={"idSession": self.idSession, "idAccount": self.idAccount},
-        )
-        req_json = req.json()
-        if req_json["codEsito"] != "S":
-            raise Exception(req_json)
+        Returns:
+        The JSON response from the request.
+
+        Raises:
+        DaisyTelecoError: If the response status is not 200.
+
+        """
+        url = self.base_url + request_path
+        _LOGGER.debug("Sending POST request: %s", url)
+        async with self.session.post(
+            url, data=post_data, headers=self.headers, auth=self.auth
+        ) as response:
+            if response.status != 200:
+                _LOGGER.warning(
+                    "Invalid response from Daisy Teleco API: %s", response.status
+                )
+                # raise DaisyTelecoError(response.status, await response.text())
+            _LOGGER.debug("Response: %s", response)
+
+            return await response.json()
+
+    async def login(self, email: str, password: str):
+        path = "teleco/services/account-login"
+        data = {"email": email, "pwd": password}
+
+        _LOGGER.debug(data)
+        result = await self.post(path, json.dumps(data))
+        if result["codEsito"] != "S":
+            raise Exception(result)
+        self.idAccount = result["valRisultato"]["idAccount"]
+        self.idSession = result["valRisultato"]["idSession"]
+        _LOGGER.debug("Login successful: %s", result)
+        return self.idAccount, self.idSession
+
+    async def get_account_installation_list(self) -> list[DaisyInstallation]:
+        path = "teleco/services/account-installation-list"
+        data = {"idSession": self.idSession, "idAccount": self.idAccount}
+
+        result = await self.post(path, json.dumps(data))
+        if result["codEsito"] != "S":
+            raise Exception(result)
 
         installations = []
-        for inst in req_json["valRisultato"]["installationList"]:
+        for inst in result["valRisultato"]["installationList"]:
             installations += [DaisyInstallation(**inst, client=self)]
         return installations
 
-    def get_installation_is_active(self, installation: DaisyInstallation):
-        req = self.s.post(
-            base_url + "teleco/services/tmate20/nodestatus",
-            json={
-                "idSession": self.idSession,
-                "idInstallation": installation.idInstallation,
-            },
-        )
-        req_json = req.json()
-        return req_json["nodeActive"]
+    async def get_installation_is_active(self, installation: DaisyInstallation):
+        path = "teleco/services/tmate20/nodestatus"
+        data = {
+            "idSession": self.idSession,
+            "idInstallation": installation.idInstallation,
+        }
+        _LOGGER.debug(data)
+        result = await self.post(path, json.dumps(data))
+        return result["nodeActive"]
 
-    def get_room_list(self, installation: DaisyInstallation) -> list[DaisyRoom]:
-        req = self.s.post(
-            base_url + "teleco/services/room-list",
-            json={
-                "idSession": self.idSession,
-                "idAccount": self.idAccount,
-                "idInstallation": installation.idInstallation,
-            },
-        )
-        req_json = req.json()
-        if req_json["codEsito"] != "S":
-            raise Exception(req_json)
+    async def get_room_list(self, installation: DaisyInstallation) -> list[DaisyRoom]:
+        path = "teleco/services/room-list"
+        data = {
+            "idSession": self.idSession,
+            "idAccount": self.idAccount,
+            "idInstallation": installation.idInstallation,
+        }
+
+        result = await self.post(path, json.dumps(data))
+        if result["codEsito"] != "S":
+            raise Exception(result)
 
         rooms = []
-        for room in req_json["valRisultato"]["roomList"]:
+        for room in result["valRisultato"]["roomList"]:
             devices = []
             for device in room.pop("deviceList"):
                 # 21 White LED light
@@ -142,64 +196,61 @@ class TelecoDaisy:
             rooms += [DaisyRoom(**room, deviceList=devices)]
         return rooms
 
-    def status_device_list(
+    async def status_device_list(
         self, installation: DaisyInstallation, device: DaisyDevice
     ) -> list[DaisyStatus]:
-        req = self.s.post(
-            base_url + "teleco/services/status-device-list",
-            json={
-                "idSession": self.idSession,
-                "idAccount": self.idAccount,
-                "idInstallation": installation.idInstallation,
-                "idInstallationDevice": device.idInstallationDevice,
-            },
-        )
-        req_json = req.json()
-        if req_json["codEsito"] != "S":
-            raise Exception(req_json)
+        path = "teleco/services/status-device-list"
+        data = {
+            "idSession": self.idSession,
+            "idAccount": self.idAccount,
+            "idInstallation": installation.idInstallation,
+            "idInstallationDevice": device.idInstallationDevice,
+        }
 
-        return [DaisyStatus(**x) for x in req_json["valRisultato"]["statusitemList"]]
+        result = await self.post(path, json.dumps(data))
+        if result["codEsito"] != "S":
+            raise Exception(result)
 
-    def feed_the_commands(
+        return [DaisyStatus(**x) for x in result["valRisultato"]["statusitemList"]]
+
+    async def feed_the_commands(
         self,
         installation: DaisyInstallation,
         commandsList: list[dict],
         ignore_ack=False,
     ):
-        req = self.s.post(
-            base_url + "teleco/services/tmate20/feedthecommands/",
-            json={
-                "commandsList": commandsList,
-                "idInstallation": installation.instCode,
-                "idSession": self.idSession,
-                "idScenario": 0,
-                "isScenario": False,
-            },
-        )
-        req_json = req.json()
-        if req_json["MessageID"] != "WS-000":
-            raise Exception(req_json)
+        path = "teleco/services/tmate20/feedthecommands/"
+        data = {
+            "commandsList": commandsList,
+            "idInstallation": installation.instCode,
+            "idSession": self.idSession,
+            "idScenario": 0,
+            "isScenario": False,
+        }
+
+        result = await self.post(path, json.dumps(data))
+        if result["MessageID"] != "WS-000":
+            raise Exception(result)
 
         if ignore_ack:
             return {"success": None}
 
-        return self._get_ack(installation, req_json["ActionReference"])
+        return self._get_ack(installation, result["ActionReference"])
 
-    def _get_ack(self, installation: DaisyInstallation, action_reference: str):
-        req = self.s.post(
-            base_url + "teleco/services/tmate20/getackcommand/",
-            json={
-                "id": action_reference,
-                "idInstallation": installation.instCode,
-                "idSession": self.idSession,
-            },
-        )
-        req_json = req.json()
-        assert req_json["MessageID"] == "WS-300"
-        if req_json["MessageText"] == "RCV":
+    async def _get_ack(self, installation: DaisyInstallation, action_reference: str):
+        path = "teleco/services/tmate20/getackcommand/"
+        data = {
+            "id": action_reference,
+            "idInstallation": installation.instCode,
+            "idSession": self.idSession,
+        }
+
+        result = await self.post(path, json.dumps(data))
+        assert result["MessageID"] == "WS-300"
+        if result["MessageText"] == "RCV":
             sleep(0.5)
             return self._get_ack(installation, action_reference)
-        if req_json["MessageText"] == "PROC":
+        if result["MessageText"] == "PROC":
             return {"success": True}
         return {"success": False}
 
@@ -233,18 +284,11 @@ class DaisyCover(DaisyDevice):
         self._open_stop_close("close")
 
     def _open_stop_close(self, open_stop_close: Literal["open", "stop", "close"]):
-        if self.idDevicetype == 22:
-            osc_map = {
-                "open": ["OPEN", 75, "CH5"],
-                "stop": ["STOP", 76, "CH7"],
-                "close": ["CLOSE", 77, "CH8"],
-            }
-        elif self.idDevicetype == 24:
-            osc_map = {
-                "open": ["OPEN", 94, "CH4"],
-                "stop": ["STOP", 95, "CH7"],
-                "close": ["CLOSE", 96, "CH1"],
-            }
+        osc_map = {
+            "open": ["OPEN", 94, "CH4"],
+            "stop": ["STOP", 95, "CH7"],
+            "close": ["CLOSE", 96, "CH1"],
+        }
         c_param, c_id, c_ll = osc_map[open_stop_close]
         return self.client.feed_the_commands(
             installation=self.installation,
@@ -312,18 +356,12 @@ class DaisyShade(DaisyDevice):
         self._open_stop_close("close")
 
     def _open_stop_close(self, open_stop_close: Literal["open", "stop", "close"]):
-        if self.idDevicetype == 22:
-            osc_map = {
-                "open": ["OPEN", 75, "CH5"],
-                "stop": ["STOP", 76, "CH7"],
-                "close": ["CLOSE", 77, "CH8"],
-            }
-        elif self.idDevicetype == 24:
-            osc_map = {
-                "open": ["OPEN", 94, "CH4"],
-                "stop": ["STOP", 95, "CH7"],
-                "close": ["CLOSE", 96, "CH1"],
-            }
+        osc_map = {
+            "open": ["OPEN", 75, "CH5"],
+            "stop": ["STOP", 76, "CH7"],
+            "close": ["CLOSE", 77, "CH8"],
+        }
+
         c_param, c_id, c_ll = osc_map[open_stop_close]
         return self.client.feed_the_commands(
             installation=self.installation,
@@ -454,12 +492,3 @@ class DaisyLight(DaisyDevice):
                 }
             ],
         )
-
-
-@dataclass
-class DaisyRoom:
-    idInstallationRoom: int
-    idRoomtype: int
-    roomDescription: str
-    roomOrder: int
-    deviceList: list[DaisyDevice]
