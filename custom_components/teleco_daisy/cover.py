@@ -10,7 +10,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.device_registry import DeviceInfo
 
 from .const import DOMAIN
-from teleco_daisy import DaisyCover
+from .teleco_daisy import DaisyCover
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -60,6 +60,8 @@ class TelecoDaisyCover(CoverEntity):
     def close_cover(self, **kwargs: Any) -> None:
         self._cover.close_cover()
         self.update()
+        self._attr_is_closed = self._cover.is_closed
+        self._attr_current_cover_position = self._cover.position
 
     def stop_cover(self, **kwargs: Any) -> None:
         self._cover.stop_cover()

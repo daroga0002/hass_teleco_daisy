@@ -13,7 +13,7 @@ from homeassistant.components.light import (
     LightEntityDescription,
     ATTR_RGB_COLOR,
 )
-from teleco_daisy import DaisyLight
+from .teleco_daisy import DaisyLight
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.device_registry import DeviceInfo
 
@@ -50,7 +50,7 @@ class TelecoDaisyLight(LightEntity):
         self._attr_unique_id = str(self._light.idInstallationDevice)
         self._attr_name = self._light.label
         self._attr_color_mode = ColorMode.RGB
-        self._attr_supported_color_modes = {ColorMode.RGB, ColorMode.BRIGHTNESS}
+        self._attr_supported_color_modes = {ColorMode.RGB}
 
     @property
     def device_info(self) -> DeviceInfo:
